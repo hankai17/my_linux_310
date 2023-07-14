@@ -1059,7 +1059,7 @@ static int tcp_packet(struct nf_conn *ct,
 }
 
 /* Called when a new connection for this protocol found. */
-static bool tcp_new(struct nf_conn *ct, const struct sk_buff *skb,
+static bool tcp_new(struct nf_conn *ct, const struct sk_buff *skb,                  // 每种协议需要实现自己的l4proto->new方法 用于ct
 		    unsigned int dataoff, unsigned int *timeouts)
 {
 	enum tcp_conntrack new_state;
@@ -1082,7 +1082,7 @@ static bool tcp_new(struct nf_conn *ct, const struct sk_buff *skb,
 		return false;
 	}
 
-	if (new_state == TCP_CONNTRACK_SYN_SENT) {
+	if (new_state == TCP_CONNTRACK_SYN_SENT) {                                      // 首包syn 跟 中间包 在链接跟踪中的处理区别是什么?
 		memset(&ct->proto.tcp, 0, sizeof(ct->proto.tcp));
 		/* SYN packet */
 		ct->proto.tcp.seen[0].td_end =

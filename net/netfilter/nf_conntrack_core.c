@@ -12,6 +12,57 @@
  * published by the Free Software Foundation.
  */
 
+// http://arthurchiao.art/blog/conntrack-design-and-implementation-zh/
+////include/net/netfilter/nf_conntrack_tuple.h
+//// 为方便 NAT 的实现，内核将 tuple 结构体拆分为 "manipulatable" 和 "non-manipulatable" 两部分
+//// 下面结构体中的 _man 是 manipulatable 的缩写
+//                                               // ude/uapi/linux/netfilter.h
+//                                               union nf_inet_addr {
+//                                                   __u32            all[4];
+//                                                   __be32           ip;
+//                                                   __be32           ip6[4];
+//                                                   struct in_addr   in;
+//                                                   struct in6_addr  in6;
+///* manipulable part of the tuple */         /  };
+//struct nf_conntrack_man {                  /
+//    union nf_inet_addr           u3; -->--/
+//    union nf_conntrack_man_proto u;  -->--\
+//                                           \   // include/uapi/linux/netfilter/nf_conntrack_tuple_common.h
+//    u_int16_t l3num; // L3 proto            \  // 协议相关的部分
+//};                                            union nf_conntrack_man_proto {
+//                                                  __be16 all;/* Add other protocols here. */
+//
+//                                                  struct { __be16 port; } tcp;
+//                                                  struct { __be16 port; } udp;
+//                                                  struct { __be16 id;   } icmp;
+//                                                  struct { __be16 port; } dccp;
+//                                                  struct { __be16 port; } sctp;
+//                                                  struct { __be16 key;  } gre;
+//                                              };
+//
+//struct nf_conntrack_tuple { /* This contains the information to distinguish a connection. */
+//    struct nf_conntrack_man src;  // 源地址信息，manipulable part
+//    struct {
+//        union nf_inet_addr u3;
+//        union {
+//            __be16 all; /* Add other protocols here. */
+//
+//            struct { __be16 port;         } tcp;
+//            struct { __be16 port;         } udp;
+//            struct { u_int8_t type, code; } icmp;
+//            struct { __be16 port;         } dccp;
+//            struct { __be16 port;         } sctp;
+//            struct { __be16 key;          } gre;
+//        } u;
+//        u_int8_t protonum; /* The protocol. */
+//        u_int8_t dir;      /* The direction (for tuplehash) */
+//    } dst;                       // 目的地址信息
+//};
+
+// ct -> tuple -> connection    // 描述单个方向的链接
+// nfc -> <ct入方向, ct出方向>  // 描述双向链接
+// ctt = ct + ct + ... + ct
+
 #include <linux/types.h>
 #include <linux/netfilter.h>
 #include <linux/module.h>
@@ -79,7 +130,7 @@ EXPORT_PER_CPU_SYMBOL(nf_conntrack_untracked);
 unsigned int nf_conntrack_hash_rnd __read_mostly;
 EXPORT_SYMBOL_GPL(nf_conntrack_hash_rnd);
 
-static u32 hash_conntrack_raw(const struct nf_conntrack_tuple *tuple, u16 zone)
+static u32 hash_conntrack_raw(const struct nf_conntrack_tuple *tuple, u16 zone) // 根据tuple计算出一个32位的哈希值
 {
 	unsigned int n;
 
@@ -459,7 +510,9 @@ EXPORT_SYMBOL_GPL(nf_conntrack_hash_check_insert);
 
 /* Confirm a connection given skb; places it in hash table */
 int
-__nf_conntrack_confirm(struct sk_buff *skb)
+__nf_conntrack_confirm(struct sk_buff *skb)                         // 之所以把创建一个ct过程分为创建new 和确认confirm两个阶段 
+                                                                    // 是因为包在经过nf_conntrack_in之后 到达nf_conntrack_confirm之前 可能会被内核丢弃
+                                                                    // 这样会导致系统残留大量的半连接状态记录 
 {
 	unsigned int hash, repl_hash;
 	struct nf_conntrack_tuple_hash *h;
@@ -498,7 +551,7 @@ __nf_conntrack_confirm(struct sk_buff *skb)
 	NF_CT_ASSERT(!nf_ct_is_confirmed(ct));
 	pr_debug("Confirming conntrack %p\n", ct);
 
-	spin_lock_bh(&nf_conntrack_lock);
+	spin_lock_bh(&nf_conntrack_lock);                                   // 关闭软中断
 
 	/* We have to check the DYING flag inside the lock to prevent
 	   a race against nf_ct_get_next_corpse() possibly called from
@@ -530,10 +583,10 @@ __nf_conntrack_confirm(struct sk_buff *skb)
 	/* Timer relative to confirmation time, not original
 	   setting time, otherwise we'd get timer wrap in
 	   weird delay cases. */
-	ct->timeout.expires += jiffies;
+	ct->timeout.expires += jiffies;                                     // 更新连接超时时间 超时后会被GC
 	add_timer(&ct->timeout);
 	atomic_inc(&ct->ct_general.use);
-	ct->status |= IPS_CONFIRMED;
+	ct->status |= IPS_CONFIRMED;                                        // 设置连接状态为confirmed
 
 	/* set conntrack timestamp, if enabled. */
 	tstamp = nf_conn_tstamp_find(ct);
@@ -548,9 +601,9 @@ __nf_conntrack_confirm(struct sk_buff *skb)
 	 * guarantee that no other CPU can find the conntrack before the above
 	 * stores are visible.
 	 */
-	__nf_conntrack_hash_insert(ct, hash, repl_hash);
+	__nf_conntrack_hash_insert(ct, hash, repl_hash);                    // 插入到连接跟踪哈希表
 	NF_CT_STAT_INC(net, insert);
-	spin_unlock_bh(&nf_conntrack_lock);
+	spin_unlock_bh(&nf_conntrack_lock);                                 // 开启软中断
 
 	help = nfct_help(ct);
 	if (help && help->helper)
@@ -700,7 +753,7 @@ __nf_conntrack_alloc(struct net *net, u16 zone,
 	 * Do not use kmem_cache_zalloc(), as this cache uses
 	 * SLAB_DESTROY_BY_RCU.
 	 */
-	ct = kmem_cache_alloc(net->ct.nf_conntrack_cachep, gfp);
+	ct = kmem_cache_alloc(net->ct.nf_conntrack_cachep, gfp);            // 分配nfc(netfilter connection)
 	if (ct == NULL) {
 		atomic_dec(&net->ct.count);
 		return ERR_PTR(-ENOMEM);
@@ -713,9 +766,9 @@ __nf_conntrack_alloc(struct net *net, u16 zone,
 	       offsetof(struct nf_conn, proto) -
 	       offsetof(struct nf_conn, tuplehash[IP_CT_DIR_MAX]));
 	spin_lock_init(&ct->lock);
-	ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple = *orig;
+	ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple = *orig;                    // 记录原始流 到nfc中
 	ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode.pprev = NULL;
-	ct->tuplehash[IP_CT_DIR_REPLY].tuple = *repl;
+	ct->tuplehash[IP_CT_DIR_REPLY].tuple = *repl;                       // 记录修改(redirect/nat)后的流 到nfc中
 	/* save hash for reusing when confirming */
 	*(unsigned long *)(&ct->tuplehash[IP_CT_DIR_REPLY].hnnode.pprev) = hash;
 	/* Don't set timer yet: wait for confirmation */
@@ -770,7 +823,7 @@ EXPORT_SYMBOL_GPL(nf_conntrack_free);
 /* Allocate a new conntrack: we return -ENOMEM if classification
    failed due to stress.  Otherwise it really is unclassifiable. */
 static struct nf_conntrack_tuple_hash *
-init_conntrack(struct net *net, struct nf_conn *tmpl,
+init_conntrack(struct net *net, struct nf_conn *tmpl,                       // 分配ct
 	       const struct nf_conntrack_tuple *tuple,
 	       struct nf_conntrack_l3proto *l3proto,
 	       struct nf_conntrack_l4proto *l4proto,
@@ -786,12 +839,13 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	struct nf_conn_timeout *timeout_ext;
 	unsigned int *timeouts;
 
-	if (!nf_ct_invert_tuple(&repl_tuple, tuple, l3proto, l4proto)) {
+	if (!nf_ct_invert_tuple(&repl_tuple, tuple, l3proto, l4proto)) {        // 从ctt中分配一个ct
 		pr_debug("Can't invert tuple.\n");
 		return NULL;
 	}
 
-	ct = __nf_conntrack_alloc(net, zone, tuple, &repl_tuple, GFP_ATOMIC,
+	ct = __nf_conntrack_alloc(net, zone, tuple/*原始链接的tuple*/, 
+        &repl_tuple/*新链接的tuple*/, GFP_ATOMIC,
 				  hash);
 	if (IS_ERR(ct))
 		return (struct nf_conntrack_tuple_hash *)ct;
@@ -802,7 +856,7 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	else
 		timeouts = l4proto->get_timeouts(net);
 
-	if (!l4proto->new(ct, skb, dataoff, timeouts)) {
+	if (!l4proto->new(ct, skb, dataoff, timeouts)) {                        // 调用协议的new方法: net/netfilter/nf_conntrack_proto_tcp.c: tcp_new
 		nf_conntrack_free(ct);
 		pr_debug("init conntrack: can't track with proto module\n");
 		return NULL;
@@ -820,7 +874,7 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 				 ecache ? ecache->expmask : 0,
 			     GFP_ATOMIC);
 
-	spin_lock_bh(&nf_conntrack_lock);
+	spin_lock_bh(&nf_conntrack_lock);                                       // 下面代码不允许软中断
 	exp = nf_ct_find_expectation(net, zone, tuple);
 	if (exp) {
 		pr_debug("conntrack: expectation arrives ct=%p exp=%p\n",
@@ -849,10 +903,10 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	}
 
 	/* Overload tuple linked list to put us in unconfirmed list. */
-	hlist_nulls_add_head_rcu(&ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode,
+	hlist_nulls_add_head_rcu(&ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode,     // ct入unconfirmed队列
 		       &net->ct.unconfirmed);
 
-	spin_unlock_bh(&nf_conntrack_lock);
+	spin_unlock_bh(&nf_conntrack_lock);                                     // 开软中断
 
 	if (exp) {
 		if (exp->expectfn)
@@ -892,7 +946,7 @@ resolve_normal_ct(struct net *net, struct nf_conn *tmpl,
 	hash = hash_conntrack_raw(&tuple, zone);
 	h = __nf_conntrack_find_get(net, zone, &tuple, hash);
 	if (!h) {
-		h = init_conntrack(net, tmpl, &tuple, l3proto, l4proto,
+		h = init_conntrack(net, tmpl, &tuple, l3proto, l4proto,         // 分配ct
 				   skb, dataoff, hash);
 		if (!h)
 			return NULL;
@@ -927,8 +981,8 @@ resolve_normal_ct(struct net *net, struct nf_conn *tmpl,
 }
 
 unsigned int
-nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
-		struct sk_buff *skb)
+nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,     // 连接跟踪模块的核心 包进入连接跟踪的地方
+		struct sk_buff *skb)                                            // 一般情况下 创建单向新连接记录ct 放到unconfirmed list
 {
 	struct nf_conn *ct, *tmpl = NULL;
 	enum ip_conntrack_info ctinfo;
@@ -942,12 +996,12 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 
 	if (skb->nfct) {
 		/* Previously seen (loopback or untracked)?  Ignore. */
-		tmpl = (struct nf_conn *)skb->nfct;
-		if (!nf_ct_is_template(tmpl)) {
+		tmpl = (struct nf_conn *)skb->nfct;                             // 看看skb是否已经绑定了ct
+		if (!nf_ct_is_template(tmpl)) {                                 // 无需跟踪的类型 增加ignore计数
 			NF_CT_STAT_INC_ATOMIC(net, ignore);
 			return NF_ACCEPT;
 		}
-		skb->nfct = NULL;
+		skb->nfct = NULL;                                               // 计数器置零准备后续处理
 	}
 
 	/* rcu_read_lock()ed by nf_hook_slow */
@@ -962,13 +1016,13 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 		goto out;
 	}
 
-	l4proto = __nf_ct_l4proto_find(pf, protonum);
+	l4proto = __nf_ct_l4proto_find(pf, protonum);                       // 提取协议相关的L4头信息 // 其中包含了该协议的连接跟踪相关的回调方法
 
 	/* It may be an special packet, error, unclean...
 	 * inverse of the return code tells to the netfilter
 	 * core what to do with the packet. */
 	if (l4proto->error != NULL) {
-		ret = l4proto->error(net, tmpl, skb, dataoff, &ctinfo,
+		ret = l4proto->error(net, tmpl, skb, dataoff, &ctinfo,          // skb完整性和合法性验证
 				     pf, hooknum);
 		if (ret <= 0) {
 			NF_CT_STAT_INC_ATOMIC(net, error);
@@ -981,8 +1035,8 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 			goto out;
 	}
 
-	ct = resolve_normal_ct(net, tmpl, skb, dataoff, pf, protonum,
-			       l3proto, l4proto, &set_reply, &ctinfo);
+	ct = resolve_normal_ct(net, tmpl, skb, dataoff, pf, protonum,       // 里面 要么是创建一个新的连接记录ct并初始化
+			       l3proto, l4proto, &set_reply, &ctinfo);              //      要么更新已有连接的状态
 	if (!ct) {
 		/* Not valid part of a connection */
 		NF_CT_STAT_INC_ATOMIC(net, invalid);
@@ -1000,7 +1054,7 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 	NF_CT_ASSERT(skb->nfct);
 
 	/* Decide what timeout policy we want to apply to this flow. */
-	timeouts = nf_ct_timeout_lookup(net, ct, l4proto);
+	timeouts = nf_ct_timeout_lookup(net, ct, l4proto);                  // 进行一些协议相关的处理 eg: UDP会更新timeout
 
 	ret = l4proto->packet(ct, skb, dataoff, ctinfo, pf, hooknum, timeouts);
 	if (ret <= 0) {

@@ -41,7 +41,7 @@ static unsigned int alloc_null_binding(struct nf_conn *ct, unsigned int hooknum)
 		 &ct->tuplehash[IP_CT_DIR_REPLY].tuple.dst.u3.ip :
 		 &ct->tuplehash[IP_CT_DIR_REPLY].tuple.src.u3.ip);
 
-	return nf_nat_setup_info(ct, &range, HOOK2MANIP(hooknum));
+	return nf_nat_setup_info(ct, &range, HOOK2MANIP(hooknum));                      // 第三个参数意思是源nat还是目的nat
 }
 
 static unsigned int nf_nat_rule_find(struct sk_buff *skb, unsigned int hooknum,

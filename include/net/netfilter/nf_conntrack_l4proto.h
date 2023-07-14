@@ -16,7 +16,8 @@
 
 struct seq_file;
 
-struct nf_conntrack_l4proto {
+                                                                                // 连接跟踪模块目前只支持以下六种协议: TCP UDP ICMP DCCP SCTP GRE
+struct nf_conntrack_l4proto {                                                   // 支持连接跟踪的协议都需要实现 结构体中定义的方法 eg: pkt_to_tuple
 	/* L3 Protocol number. */
 	u_int16_t l3proto;
 
@@ -25,7 +26,7 @@ struct nf_conntrack_l4proto {
 
 	/* Try to fill in the third arg: dataoff is offset past network protocol
            hdr.  Return true if possible. */
-	bool (*pkt_to_tuple)(const struct sk_buff *skb, unsigned int dataoff,
+	bool (*pkt_to_tuple)(const struct sk_buff *skb, unsigned int dataoff,       // 从包skb中提取tuple
 			     struct nf_conntrack_tuple *tuple);
 
 	/* Invert the per-proto part of the tuple: ie. turn xmit into reply.
@@ -34,7 +35,7 @@ struct nf_conntrack_l4proto {
 	bool (*invert_tuple)(struct nf_conntrack_tuple *inverse,
 			     const struct nf_conntrack_tuple *orig);
 
-	/* Returns verdict for packet, or -1 for invalid. */
+	/* Returns verdict for packet, or -1 for invalid. */                        // 对包进行判决 返回判决结果 returns verdict for packet
 	int (*packet)(struct nf_conn *ct,
 		      const struct sk_buff *skb,
 		      unsigned int dataoff,
@@ -45,13 +46,13 @@ struct nf_conntrack_l4proto {
 
 	/* Called when a new connection for this protocol found;
 	 * returns TRUE if it's OK.  If so, packet() called next. */
-	bool (*new)(struct nf_conn *ct, const struct sk_buff *skb,
+	bool (*new)(struct nf_conn *ct, const struct sk_buff *skb,                  // 创建一个新连接 成功返true 接下来调packet方法
 		    unsigned int dataoff, unsigned int *timeouts);
 
 	/* Called when a conntrack entry is destroyed */
 	void (*destroy)(struct nf_conn *ct);
 
-	int (*error)(struct net *net, struct nf_conn *tmpl, struct sk_buff *skb,
+	int (*error)(struct net *net, struct nf_conn *tmpl, struct sk_buff *skb,    // 判断当前数据包能否被连接跟踪 如果返回成功 接下来调packet方法
 		     unsigned int dataoff, enum ip_conntrack_info *ctinfo,
 		     u_int8_t pf, unsigned int hooknum);
 

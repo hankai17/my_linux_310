@@ -96,7 +96,7 @@ static int redirect_tg4_check(const struct xt_tgchk_param *par)
 }
 
 static unsigned int
-redirect_tg4(struct sk_buff *skb, const struct xt_action_param *par)
+redirect_tg4(struct sk_buff *skb, const struct xt_action_param *par)            // REDIRECT 关键字作用
 {
 	struct nf_conn *ct;
 	enum ip_conntrack_info ctinfo;
@@ -113,7 +113,7 @@ redirect_tg4(struct sk_buff *skb, const struct xt_action_param *par)
 	/* Local packets: make them go to loopback */
 	if (par->hooknum == NF_INET_LOCAL_OUT)
 		newdst = htonl(0x7F000001);
-	else {
+	else {                                                                      // PREROUTE阶段
 		struct in_device *indev;
 		struct in_ifaddr *ifa;
 
@@ -139,7 +139,7 @@ redirect_tg4(struct sk_buff *skb, const struct xt_action_param *par)
 	newrange.max_proto   = mr->range[0].max;
 
 	/* Hand modified range to generic setup. */
-	return nf_nat_setup_info(ct, &newrange, NF_NAT_MANIP_DST);
+	return nf_nat_setup_info(ct, &newrange, NF_NAT_MANIP_DST);                  // DNAT
 }
 
 static struct xt_target redirect_tg_reg[] __read_mostly = {
