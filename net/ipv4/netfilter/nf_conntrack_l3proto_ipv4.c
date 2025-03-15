@@ -272,7 +272,7 @@ getorigdst(struct sock *sk, int optval, void __user *user, int *len)
 	struct nf_conntrack_tuple tuple;
 
 	memset(&tuple, 0, sizeof(tuple));
-	tuple.src.u3.ip = inet->inet_rcv_saddr;
+	tuple.src.u3.ip = inet->inet_rcv_saddr;                                     // 构造一个ct_tuple 记录原始的源目ip/port
 	tuple.src.u.tcp.port = inet->inet_sport;
 	tuple.dst.u3.ip = inet->inet_daddr;
 	tuple.dst.u.tcp.port = inet->inet_dport;
@@ -291,13 +291,13 @@ getorigdst(struct sock *sk, int optval, void __user *user, int *len)
 		return -EINVAL;
 	}
 
-	h = nf_conntrack_find_get(sock_net(sk), NF_CT_DEFAULT_ZONE, &tuple);
-	if (h) {
+	h = nf_conntrack_find_get(sock_net(sk), NF_CT_DEFAULT_ZONE, &tuple);        // 根据构造tuple计算hash 查找全局ctt
+	if (h) {                                                                    // ctt中 存在该ct
 		struct sockaddr_in sin;
 		struct nf_conn *ct = nf_ct_tuplehash_to_ctrack(h);
 
 		sin.sin_family = AF_INET;
-		sin.sin_port = ct->tuplehash[IP_CT_DIR_ORIGINAL]
+		sin.sin_port = ct->tuplehash[IP_CT_DIR_ORIGINAL]                        // 获取 原始的目的ip/port
 			.tuple.dst.u.tcp.port;
 		sin.sin_addr.s_addr = ct->tuplehash[IP_CT_DIR_ORIGINAL]
 			.tuple.dst.u3.ip;
@@ -306,7 +306,7 @@ getorigdst(struct sock *sk, int optval, void __user *user, int *len)
 		pr_debug("SO_ORIGINAL_DST: %pI4 %u\n",
 			 &sin.sin_addr.s_addr, ntohs(sin.sin_port));
 		nf_ct_put(ct);
-		if (copy_to_user(user, &sin, sizeof(sin)) != 0)
+		if (copy_to_user(user, &sin, sizeof(sin)) != 0)                         // 传出
 			return -EFAULT;
 		else
 			return 0;
